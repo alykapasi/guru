@@ -1,0 +1,9 @@
+# Ignore everything that shouldn’t go into the build context
+.git
+**/__pycache__
+**/*.py[cod]
+frontend/node_modules
+frontend/dist
+backend/.venv
+.env*
+.DS_Store
