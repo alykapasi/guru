@@ -1,6 +1,7 @@
 # app/services/llm.py
 
-from openai import AsyncOpenAI
+import asyncio
+from openai import AsyncOpenAI, RateLimitError
 
 from app.config import settings
 
@@ -8,22 +9,33 @@ from app.config import settings
 # when moving to direct provider, just change base_url and api_key only
 
 client = AsyncOpenAI(
-    base_url="https://openrouter.ai/api/v1",
-    api_key=settings.openrouter_api_key,
+    base_url="http://localhost:11434/v1",
+    api_key="ollama",
 )
 
 # model aliases from .env
 SMART = settings.llm_smart
 FAST = settings.llm_fast
 
-async def _chat(model: str, prompt: str, max_tokens: int = 1000) -> str:
+async def _chat(model: str, prompt: str, max_tokens: int = 1000, retries: int = 3) -> str:
     """Single-turn call. Used for ingestion and grading"""
-    response = await client.chat.completions.create(
-        model=model,
-        max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.choices[0].message.content.strip()
+    for attempt in range(retries):
+        try:
+            response = await client.chat.completions.create(
+                model=model,
+                max_tokens=max_tokens,
+                messages=[{"role": "user", "content": prompt}]
+            )
+            content = response.choices[0].message.content
+            if content:
+                return content.strip()
+            await asyncio.sleep(2 ** attempt)
+        except RateLimitError:
+            if attempt == retries - 1:
+                raise
+            wait = 5 * (2 ** attempt)
+            await asyncio.sleep(wait)
+    raise ValueError(f"Empty response from {model} after {retries} attempts")
 
 async def _chat_with_system(
         model: str,

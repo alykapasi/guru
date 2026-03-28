@@ -22,7 +22,7 @@ async def generate_lesson(
     pool = Depends(get_pool),
 ):
     query = req.topic or "overview of the main topics in this material"
-    ctx = await build_teaching_context(query, req.material_id, user.id, pool)
+    ctx = await build_teaching_context(query, req.material_id, user["id"], pool)
 
     from app.prompts.lesson import build_lesson_prompt
     prompt = build_lesson_prompt(ctx, req.topic)

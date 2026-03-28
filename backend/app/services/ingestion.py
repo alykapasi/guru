@@ -1,7 +1,8 @@
 # app/services/ingestion.py
 
+import asyncio
 from docling.document_converter import DocumentConverter
-from docling.datamodel.base_models import InputFormat
+from docling.datamodel.base_models import InputFormat, DocItemLabel
 import pathlib 
 import tempfile
 import uuid
@@ -40,15 +41,23 @@ async def _run_ingestion(material_id: uuid.UUID, minio_key: str, pool):
         result = converter.convert(local_path)
         doc = result.document
 
-        # 3. chunk by structure
+        # DEBUG
+        # print("=== DOCLING ITEMS ===")
+        # for item, level in doc.iterate_items():
+        #     print(f"  level={level} label={getattr(item, 'label', None)!r} text={getattr(item, 'text', '')[:60]!r}")
+
+        # # 3. chunk by structure
         raw_chunks = _chunk_document(doc)
+        # print(f"=== CHUNKS: {len(raw_chunks)} ===")
+        # for c in raw_chunks[:3]:
+        #     print(f"  heading={c['heading_path']} text={c['text'][:80]!r}")
     
     # 4. generate context prefix for each chunk
     # get full document text for context generation
     full_doc_text = doc.export_to_markdown()[:8000]
 
     enriched = []
-    for chunk in raw_chunks:
+    for i, chunk in enumerate(raw_chunks):
         prefix = await generate_context_prefix(
             document_summary=full_doc_text,
             chunk_text=chunk["text"],
@@ -56,6 +65,8 @@ async def _run_ingestion(material_id: uuid.UUID, minio_key: str, pool):
         )
         full_text = f"{prefix}\n\n{chunk['text']}"
         enriched.append({**chunk, "context_text": prefix, "full_text": full_text})
+        if i < len(raw_chunks) - 1:
+            await asyncio.sleep(1)
 
     # 5. extract concepts
     concepts = await extract_concepts(full_doc_text)
@@ -94,7 +105,6 @@ def _chunk_document(doc) -> list[dict]:
     # labels: 'section_header', 'text', 'list_item', 'table', 'figure_caption'
     current_heading_path = []
     current_section_text = []
-    current_section_level = 0
 
     def flush(heading_path, text_parts):
         if not text_parts:
@@ -103,17 +113,16 @@ def _chunk_document(doc) -> list[dict]:
         if len(full) < 80:
             return
         # split if too long
-        sub_chunks = _split_if_long(full, heading_path)
-        chunks.extend(sub_chunks)
+        chunks.extend(_split_if_long(full, heading_path[:]))
 
-    for element in doc.iterate_items():
-        label = getattr(element, "label", "")
+    for element, _level in doc.iterate_items():
+        label = getattr(element, "label", None)
         text = getattr(element, "text", "") or ""
         text = text.strip()
         if not text:
             continue
 
-        if not label == "section_header":
+        if label == DocItemLabel.SECTION_HEADER:
             # flush current section before starting a new one
             flush(current_heading_path[:], current_section_text[:])
             current_section_text = []

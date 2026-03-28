@@ -1,5 +1,6 @@
 # app/services/retrieval.py
 
+import json
 import uuid
 
 from app.services.embedding import embed_query
@@ -70,7 +71,9 @@ async def build_teaching_context(
             "SELECT title, concepts FROM materials WHERE id=$1", material_id
         )
 
-    profile = dict(profile_row["answers"]) if profile_row else {}
+    profile_raw = profile_row["answers"] if profile_row else {}
+    profile = json.loads(profile_raw) if isinstance(profile_raw, str) else dict(profile_raw)
+    # profile = dict(profile_row["answers"]) if profile_row else {}
     mastery = {r["concept"]: round(r["score"], 2) for r in mastery_rows}
     weak = [c for c, s in mastery.items() if s < 0.6]
     strong = [c for c, s in mastery.items() if s >= 0.8]
