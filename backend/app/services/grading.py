@@ -6,24 +6,33 @@ from app.services.llm import _chat, FAST
 
 async def grade_quiz(questions: list[dict], answers: dict[str, str]) -> dict:
     results = []
-    for q in questions:
-        qid = q["id"]
+    for i, q in enumerate(questions):
+        # Use model's id if present, fall back to index-based id
+        qid = q.get("id") or f"q{i}"
         user_answer = answers.get(qid, "")
 
-        if q["type"] == "mcq":
-            correct = user_answer.strip().upper() == q["correct"].strip().upper()
+        if q.get("type") == "mcq":
+            correct_key = (
+                q.get("correct") or q.get("correct_answer") or
+                q.get("answer") or q.get("correctAnswer") or ""
+            )
+            correct = user_answer.strip().upper() == correct_key.strip().upper()
             score = 1.0 if correct else 0.0
             feedback = None
         else:
-            score, feedback = await _grade_short_answer(
-                q["question"], q["ideal_answer"], user_answer
-            )
+            ideal = q.get("ideal_answer") or q.get("answer") or ""
+            question_text = q.get("question") or ""
+            score, feedback = await _grade_short_answer(question_text, ideal, user_answer)
+
         results.append({
             "question_id": qid,
-            "concept": q["concept"],
+            "concept": q.get("concept", "General"),
             "score": score,
             "feedback": feedback,
-            "correct_answer": q.get("correct") or q.get("ideal_answer"),
+            "correct_answer": (
+                q.get("correct") or q.get("correct_answer") or
+                q.get("ideal_answer") or q.get("answer") or ""
+            ),
         })
 
     overall = sum(r["score"] for r in results) / len(results) if results else 0

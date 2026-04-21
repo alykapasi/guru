@@ -2,10 +2,14 @@
 
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import LandingPage from './pages/LandingPage'
+
+import LibraryPage from './pages/LibraryPage'
 import LoginPage from './pages/LoginPage'
 import OnboardingPage from './pages/OnboardingPage'
-import DashboardPage from './pages/DashboardPage'
+import SessionsPage from './pages/SessionsPage'
 import StudyPage from './pages/StudyPage'
+import WikiPage from './pages/WikiPage'
 
 const queryClient = new QueryClient()
 
@@ -19,11 +23,15 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <Routes>
+          <Route path="/" element={<LandingPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/onboarding" element={<PrivateRoute><OnboardingPage /></PrivateRoute>} />
-          <Route path="/dashboard" element={<PrivateRoute><DashboardPage /></PrivateRoute>} />
+          <Route path="/library" element={<PrivateRoute><LibraryPage /></PrivateRoute>} />
+          <Route path="/sessions" element={<PrivateRoute><SessionsPage /></PrivateRoute>} />
+          <Route path="/wiki" element={<PrivateRoute><WikiPage /></PrivateRoute>} />
           <Route path="/study/:materialId" element={<PrivateRoute><StudyPage /></PrivateRoute>} />
-          <Route path="*" element={<Navigate to="/dashboard" reeplace />} />
+          <Route path="/dashboard" element={<Navigate to="/library" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>
     </QueryClientProvider>

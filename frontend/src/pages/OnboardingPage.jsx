@@ -27,7 +27,7 @@ export default function OnboardingPage() {
         setLoading(true)
         try {
             await api.profile.save(answers)
-            navigate('/dashboard')
+            navigate('/library')
         } finally {
             setLoading(false)
         }

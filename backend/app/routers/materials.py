@@ -18,7 +18,7 @@ async def upload_materials(
     pool = Depends(get_pool),
 ):
     material_id = uuid.uuid4()
-    minio_key = f"{user["id"]}/{material_id}/{file.filename}"
+    minio_key = f"{str(user["id"])}/{material_id}/{file.filename}"
 
     # 1. stream file to minio
     await upload_to_minio(minio_key, file)
@@ -29,7 +29,7 @@ async def upload_materials(
             """INSERT INTO materials
             (id, user_id, title, filename, file_type, minio_key, status)
             VALUES ($1, $2, $3, $4, $5, $6, 'pending')""",
-            material_id, user["id"],
+            material_id, str(user["id"]),
             file.filename.rsplit('.', 1)[0],
             file.filename,
             file.filename.rsplit('.', 1)[-1].lower(),

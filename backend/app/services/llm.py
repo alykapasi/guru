@@ -75,7 +75,7 @@ async def generate_context_prefix(
 async def extract_concepts(document_text: str) -> list[str]:
     """Extract 5-20 key concepts for mastery tracking; uses FAST model"""
     prompt = (
-        "Read this document and identify the 55 to 20 most important\n"
+        "Read this document and identify the 5 to 20 most important\n"
         "concepts, topics, or skills a learner neeeds to understand.\n\n"
         "Rules:\n"
         "- Each concept should be 2-5 words\n"
@@ -87,4 +87,19 @@ async def extract_concepts(document_text: str) -> list[str]:
     import json
     raw = await _chat(FAST, prompt, max_tokens=500)
     raw = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-    return json.loads(raw)
+
+    if not raw:
+        return []
+    
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # try extracting a JSON array if model added surrounding text
+        import re
+        match = re.search(r'\[.*?\]', raw, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group())
+            except json.JSONDecodeError:
+                pass
+        return []
