@@ -18,12 +18,9 @@ async function request<T>(path: string, opts: RequestInit = {}): Promise<T> {
 }
 
 async function upload<T>(path: string, form: FormData): Promise<T> {
-    // No Content-Type header — browser sets it automatically with boundary for multipart
     const res = await fetch(`${BASE_URL}${path}`, {
         method: 'POST',
-        headers: {
-            ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}),
-        },
+        headers: { ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) },
         body: form,
     })
     if (!res.ok) throw new Error(await res.text())
@@ -33,7 +30,7 @@ async function upload<T>(path: string, form: FormData): Promise<T> {
 export const api = {
     auth: {
         login: (email: string, password: string) =>
-            request('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) }),
+            request('/auth/login',    { method: 'POST', body: JSON.stringify({ email, password }) }),
         register: (email: string, password: string) =>
             request('/auth/register', { method: 'POST', body: JSON.stringify({ email, password }) }),
     },
@@ -44,25 +41,52 @@ export const api = {
             return upload('/materials/', form)
         },
         list: () => request('/materials/'),
-        get: (id: string) => request(`/materials/${id}`),
+        get:  (id: string) => request(`/materials/${id}`),
+    },
+    sessions: {
+        create: (material_ids: string[], goal: string) =>
+            request('/chat/sessions/create', {
+                method: 'POST',
+                body: JSON.stringify({ material_ids, goal })
+            }),
+        addMaterial: (session_id: string, material_id: string) =>
+            request(`/chat/sessions/${session_id}/materials`, {
+                method: 'POST',
+                body: JSON.stringify({ material_id })
+            }),
+        list: () => request('/chat/sessions'),
+        messages: (session_id: string) => request(`/chat/sessions/${session_id}/messages`),
     },
     chat: {
-        message: (session_id: string, material_id: string, message: string) =>
-            request('/chat/message', { method: 'POST', body: JSON.stringify({ session_id, material_id, message }) }),
-        sessions: () => request('/chat/sessions'),
-        sessionMessages: (session_id: string) => request(`/chat/sessions/${session_id}/messages`),
+        message: (session_id: string, message: string) =>
+            request('/chat/message', {
+                method: 'POST',
+                body: JSON.stringify({ session_id, message })
+            }),
     },
     lessons: {
-        generate: (material_id: string, topic?: string) =>
-            request('/lesson/generate', { method: 'POST', body: JSON.stringify({ material_id, topic }) }),
-        checklist: (material_id: string, goal: string) =>
-            request('/lesson/checklist', { method: 'POST', body: JSON.stringify({ material_id, goal }) }),
+        generate: (session_id: string, topic?: string) =>
+            request('/lesson/generate', {
+                method: 'POST',
+                body: JSON.stringify({ session_id, topic })
+            }),
+        checklist: (session_id: string, goal: string) =>
+            request('/lesson/checklist', {
+                method: 'POST',
+                body: JSON.stringify({ session_id, goal })
+            }),
     },
     quiz: {
-        generate: (material_id: string, topic?: string, n_questions = 8) =>
-            request('/quiz/generate', { method: 'POST', body: JSON.stringify({ material_id, topic, n_questions }) }),
+        generate: (session_id: string, topic?: string, n_questions = 8) =>
+            request('/quiz/generate', {
+                method: 'POST',
+                body: JSON.stringify({ session_id, topic, n_questions })
+            }),
         submit: (quiz_attempt_id: string, answers: Record<string, string>) =>
-            request('/quiz/submit', { method: 'POST', body: JSON.stringify({ quiz_attempt_id, answers }) }),
+            request('/quiz/submit', {
+                method: 'POST',
+                body: JSON.stringify({ quiz_attempt_id, answers })
+            }),
     },
     profile: {
         save: (answers: object) =>
@@ -71,6 +95,4 @@ export const api = {
         mastery: (material_id: string) => request(`/profile/mastery/${material_id}`),
         wiki: () => request('/profile/wiki'),
     },
-    // sessionMessages: (session_id: string) =>
-    //     request(`/chat/sessions/${session_id}/messages`),
 }

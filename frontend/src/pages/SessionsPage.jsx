@@ -11,14 +11,14 @@ export default function SessionsPage() {
 
   const { data: sessions = [], isLoading } = useQuery({
     queryKey: ['sessions'],
-    queryFn: api.chat.sessions,
+    queryFn: api.sessions.list,
   })
 
   const selectedId = selected?.id
 
   const { data: messages = [], isLoading: messagesLoading } = useQuery({
     queryKey: ['session-messages', selectedId],
-    queryFn: () => api.chat.sessionMessages(selectedId),
+    queryFn: () => api.sessions.messages(selectedId),
     enabled: !!selectedId,
   })
 
@@ -56,7 +56,7 @@ export default function SessionsPage() {
                   session={s}
                   isSelected={selected?.id === s.id}
                   onClick={() => setSelected(s.id === selected?.id ? null : s)}
-                  onContinue={() => navigate(`/study/${s.material_id}?session=${s.id}`)}
+                  onContinue={() => navigate(`/study/${s.id}`, { state: {goal: 'Study session' } })}
                 />
               ))}
             </div>
@@ -70,7 +70,7 @@ export default function SessionsPage() {
             messages={messages}
             loading={messagesLoading}
             onClose={() => setSelected(null)}
-            onContinue={() => navigate(`/study/${selected.material_id}?session=${selected.id}`)}
+            onContinue={() => navigate(`/study/${selected.id}`, { state: { goal: 'Study session' } })}
           />
         )}
       </div>
@@ -99,7 +99,7 @@ function SessionRow({ session: s, isSelected, onClick, onContinue }) {
         </div>
         <div className="min-w-0">
           <p className="text-white text-sm font-medium truncate">
-            {s.material_title ?? 'Unknown material'}
+            {s.material_title?.join(' + ') ?? 'Unknown material'}
           </p>
           <p className="text-slate-500 text-xs mt-0.5">
             {s.message_count} messages · {dateStr} at {timeStr}

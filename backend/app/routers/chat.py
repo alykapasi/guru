@@ -1,6 +1,6 @@
 # app/routers/chat.py
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import uuid
 
@@ -12,10 +12,83 @@ from app.services.retrieval import build_teaching_context
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+class SessionCreateRequest(BaseModel):
+    material_ids: list[uuid.UUID]
+    goal: str
+
+class AddMaterialRequest(BaseModel):
+    material_id: uuid.UUID
+
 class ChatRequest(BaseModel):
     session_id: uuid.UUID
-    material_id: uuid.UUID
     message: str
+
+@router.post("/sessions/create")
+async def create_session(
+    req: SessionCreateRequest,
+    user = Depends(get_current_user),
+    pool = Depends(get_pool),
+):
+    if not req.material_ids:
+        raise HTTPException(400, "At least one material required")
+    
+    session_id = uuid.uuid4()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id FROM materials
+            WHERE id = ANY($1::uuid[])
+            AND user_id = $2
+            AND status = 'ready'
+            """,
+            req.material_ids, str(user["id"])
+        )
+        if len(rows) != len(req.material_ids):
+            raise HTTPException(400, "One or more materials not found or not ready")
+        
+        await conn.execute(
+            "INSERT INTO sessions (id, user_id, mode) VALUES ($1, $2, 'chat')",
+            session_id, str(user["id"])
+        )
+        for mid in req.material_ids:
+            await conn.execute(
+                "INSERT INTO session_materials (session_id, material_id) VALUES ($1, $2)",
+                session_id, mid
+            )
+
+    return {"session_id": str(session_id)}
+
+@router.post("/sessions/{session_id}/materials")
+async def add_material_to_session(
+    session_id: uuid.UUID,
+    req: AddMaterialRequest,
+    user = Depends(get_current_user),
+    pool = Depends(get_pool),
+):
+    async with pool.acquire() as conn:
+        session = await conn.fetchrow(
+            "SELECT id FROM sessions WHERE id=$1 AND user_id=$2",
+            session_id, str(user["id"])
+        )
+        if not session:
+            raise HTTPException(404, "Session not found")
+        
+        material = await conn.fetchrow(
+            "SELECT id FROM materials WHERE id=$1 AND user_id=$2 AND status='ready'",
+            req.material_id, str(user["id"])
+        )
+        if not material:
+            raise HTTPException(404, "Material not found or not ready")
+        
+        # upsert - safe to call even if already added
+        await conn.execute(
+            """
+            INSERT INTO session_materials (session_id, material_id)
+            VALUES ($1, $2) ON CONFLICT DO NOTHING
+            """,
+            session_id, req.material_id
+        )
+    return {"status": "added"}
 
 @router.post("/message")
 async def chat_message(
@@ -23,62 +96,67 @@ async def chat_message(
     user = Depends(get_current_user),
     pool = Depends(get_pool)
 ):
-    # 1. load convo history for this session (~last 10 turns for now)
+    # 1. get session's materials
     async with pool.acquire() as conn:
-        await conn.execute(
-            """INSERT INTO sessions (id, user_id, material_id, mode)
-            VALUES ($1, $2, $3, 'chat')
-            ON CONFLICT (id) DO NOTHING
-            """,
-            req.session_id, str(user["id"]), req.material_id
+        session = await conn.fetchrow(
+            "SELECT id FROM sessions WHERE id=$1 AND user_id=$2",
+            req.session_id, str(user["id"])
         )
-
-    async with pool.acquire() as conn:
-        history = await conn.fetch(
-            """SELECT role, content FROM messages
-               WHERE session_id=$1 ORDER BY created_at DESC LIMIT 20""",
+        if not session:
+            raise HTTPException(404, "Session not found")
+        
+        material_rows = await conn.fetch(
+            "SELECT material_id FROM session_materials WHERE session_id=$1",
             req.session_id
         )
-    history = list(reversed(history))
+        history = await conn.fetch(
+            """
+            SELECT role, content FROM messages
+            WHERE session_id=$1 ORDER BY created_at DESC LIMIT 20
+            """,
+            req.session_id
+        )
 
-    # 2. build context
-    ctx = await build_teaching_context(
-        req.message, req.material_id, str(user["id"]), pool
-    )
+        material_ids = [r["material_id"] for r in material_rows]
+        if not material_ids:
+            raise HTTPException(400, "No materials attached to this session")
+        
+        history = list(reversed(history))
 
-    # 3. build sys prompt
-    system_prompt = build_chat_system_prompt(ctx)
+        # 2. build context across all materials
+        ctx = await build_teaching_context(
+            req.message, material_ids, str(user["id"]), pool
+        )
 
-    # 4. format messages for LLM API
-    messages = [
-        {"role": r["role"], "content": r["content"]}
-        for r in history
-    ] + [{"role": "user", "content": req.message}]
+        # 3. build system prompt and call llm
+        system_prompt = build_chat_system_prompt(ctx)
+        messages = [
+            {"role": r["role"], "content": r["content"]}
+            for r in history
+        ] + [{"role": "user", "content": req.message}]
 
-    # 5. call llm (will need to double check)
-    reply = await _chat_with_system(
-        model=SMART,
-        system=system_prompt,
-        messages=messages,
-        max_tokens=2048,
-    )
+        reply = await _chat_with_system(
+            model=SMART, system=system_prompt,
+            messages=messages, max_tokens=2048
+        )
 
-    # 6. persist both turns
-    async with pool.acquire() as conn:
-        for role, content, chunk_ids in [
-            ("user", req.message, []),
-            ("assistant", reply, ctx["chunk_ids"])
-        ]:
-            await conn.execute(
-                """INSERT INTO messages
-                   (id, session_id, role, content, chunk_ids)
-                   VALUES ($1, $2, $3, $4, $5)""",
-                   uuid.uuid4(), req.session_id, role, content,
-                   [uuid.UUID(c) for c in chunk_ids] if chunk_ids else []
-            )
+        # 4. persist
+        async with pool.acquire() as conn:
+            for role, content, chunk_ids in [
+                ("user", req.message, []),
+                ("assistant", reply, ctx["chunk_ids"]),
+            ]:
+                await conn.execute(
+                    """
+                    INSERT INTO messages (id, session_id, role, content, chunk_ids)
+                    VALUES ($1, $2, $3, $4, $5)
+                    """,
+                    uuid.uuid4(), req.session_id, role, content,
+                    [uuid.UUID(c) for c in chunk_ids] if chunk_ids else []
+                )
 
-    return {"reply": reply, "chunk_ids": ctx["chunk_ids"]}
-
+        return {"reply": reply, "chunk_ids": ctx["chunk_ids"]}
+    
 @router.get("/sessions")
 async def list_sessions(
     user = Depends(get_current_user),
@@ -88,18 +166,21 @@ async def list_sessions(
         rows = await conn.fetch(
             """
             SELECT
-                s.id, s.material_id, s.mode, s.started_at,
-                m.title as material_title,
-                COUNT(msg.id) as message_count,
-                MAX(msg.created_at) as last_message_at
+                s.id,
+                s.mode,
+                s.started_at,
+                COUNT(DISTINCT msg.id) AS message_count,
+                MAX(msg.created_at) AS last_message_at,
+                ARRAY_AGG(DISTINCT m.title) FILTER (WHERE m.title IS NOT NULL) AS material_titles,
+                ARRAY_AGG(DISTINCT sm.material_id) FILTER (WHERE sm.material_id IS NOT NULL) AS material_ids
             FROM sessions s
-            LEFT JOIN materials m ON m.id = s.material_id
+            LEFT JOIN session_materials sm ON sm.session_id = s.id
+            LEFT JOIN materials m ON m.id = sm.material_id
             LEFT JOIN messages msg ON msg.session_id = s.id
             WHERE s.user_id = $1
-            GROUP BY s.id, s.material_id, s.mode, s.started_at, m.title
+            GROUP BY s.id
             ORDER BY COALESCE(MAX(msg.created_at), s.started_at) DESC
-            """,
-            str(user["id"])
+            """, str(user["id"])
         )
     return [dict(r) for r in rows]
 
@@ -110,17 +191,12 @@ async def get_session_messages(
     pool = Depends(get_pool),
 ):
     async with pool.acquire() as conn:
-        # verify ownership
-        # session = await conn.fetchrow(
-        #     "SELECT id FROM sessions WHERE id=$1 AND user_id=$2",
-        #     session_id, str(user["id"])
-        # )
-        # if not session:
-        #     return []
         messages = await conn.fetch(
             """
-            SELECT role, content, created_at FROM messages
-            WHERE session_id=$1 ORDER BY created_at ASC
+            SELECT role, content, created_at
+            FROM messages
+            WHERE session_id=$1
+            ORDER BY created_at ASC
             """,
             session_id
         )

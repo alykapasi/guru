@@ -1,8 +1,8 @@
 # app/routers/quiz.py
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-import uuid
+import uuid, json, re
 
 from app.auth import get_current_user
 from app.db import get_pool
@@ -22,14 +22,30 @@ class QuizSubmission(BaseModel):
 
 @router.post("/generate")
 async def generate_quiz(req: QuizRequest, user=Depends(get_current_user), pool=Depends(get_pool)):
-    query = req.topic or "key concepts across the whole material"
+    # get materials from session
+    async with pool.acquire() as conn:
+        session = await conn.fetchrow(
+            "SELECT id FROM sessions WHERE id=$1 AND user_id=$2",
+            req.session_id, str(user["id"])
+        )
+        if not session:
+            raise HTTPException(404, "Session not found")
+        material_rows = await conn.fetch(
+            "SELECT material_id FROM session_materials WHERE session_id=$1",
+            req.session_id
+        )
+
+    material_ids = [r["material_id"] for r in material_rows]
+    if not material_ids:
+        raise HTTPException(400, "No materials in this session")
+    
+    query = req.topic or "key concepts across the all materials"
     ctx = await build_teaching_context(query, req.material_id, str(user["id"]), pool)
 
     from app.prompts.quiz import build_quiz_prompt
     prompt = build_quiz_prompt(ctx, req.topic, req.n_questions)
 
     reply = await _chat(model=SMART, prompt=prompt, max_tokens=3000)
-    import json, re
     raw = reply.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
 
     try:
@@ -37,13 +53,7 @@ async def generate_quiz(req: QuizRequest, user=Depends(get_current_user), pool=D
     except json.JSONDecodeError:
         # Try extracting just the array
         match = re.search(r'\[.*\]', raw, re.DOTALL)
-        if match:
-            try:
-                quiz_data = json.loads(match.group())
-            except Exception:
-                quiz_data = []
-        else:
-            quiz_data = []
+        quiz_data = json.loads(match.group()) if match else []
 
     # Normalise — guarantee every question has id, type, concept
     normalised = []
@@ -62,11 +72,11 @@ async def generate_quiz(req: QuizRequest, user=Depends(get_current_user), pool=D
         })
 
     attempt_id = uuid.uuid4()
+    primary_material_id = material_ids[0]
     async with pool.acquire() as conn:
-        session_id = await _ensure_session(conn, str(user["id"]), req.material_id, "quiz")
         await conn.execute(
             "INSERT INTO quiz_attempts (id, user_id, session_id, material_id, questions) VALUES($1,$2,$3,$4,$5)",
-            attempt_id, str(user["id"]), session_id, req.material_id, json.dumps(normalised)
+            attempt_id, str(user["id"]), req.session_id, primary_material_id, json.dumps(normalised)
         )
     return {"attempt_id": str(attempt_id), "quiz": normalised}
 
@@ -75,32 +85,21 @@ async def submit_quiz(req: QuizSubmission, user=Depends(get_current_user), pool=
     # load quiz
     async with pool.acquire() as conn:
         row = await conn.fetchrow("SELECT * FROM quiz_attempts WHERE id=$1", req.quiz_attempt_id)
-        
-    import json
+    
+    if not row:
+        raise HTTPException(404, "Quiz attempt not found")
+    
     questions = json.loads(row["questions"])
 
-    # grade the quiz
     from app.services.grading import grade_quiz
     graded = await grade_quiz(questions, req.answers)
 
-        # update mastery scores
     from app.services.mastery import update_mastery
     await update_mastery(str(user["id"]), row["material_id"], graded, pool)
 
-        # persist score
     async with pool.acquire() as conn:
         await conn.execute(
             "UPDATE quiz_attempts SET score=$1, submitted_at=NOW() WHERE id=$2",
             graded["overall_score"], req.quiz_attempt_id
         )
     return graded
-    
-async def _ensure_session(conn, user_id, material_id, mode):
-    session_id = uuid.uuid4()
-    await conn.execute(
-        """
-        INSERT INTO sessions (id, user_id, material_id, mode)
-        VALUES ($1, $2, $3, $4)
-        """, session_id, str(user_id), material_id, mode
-    )
-    return session_id

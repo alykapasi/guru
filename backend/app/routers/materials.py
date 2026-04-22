@@ -1,19 +1,18 @@
 # app/routers/materials.py
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, UploadFile
 import uuid
 
 from app.auth import get_current_user
 from app.db import get_pool
+from app.queue import get_queue
 from app.services.storage import upload_to_minio
-from app.services.ingestion import ingest_material
 
 router = APIRouter(prefix="/materials", tags=["materials"])
 
 @router.post("/")
 async def upload_materials(
     file: UploadFile,
-    background_tasks: BackgroundTasks,
     user = Depends(get_current_user),
     pool = Depends(get_pool),
 ):
@@ -37,7 +36,12 @@ async def upload_materials(
         )
 
     # 3. background ingestion (non-blocking)
-    background_tasks.add_task(ingest_material, material_id, minio_key, pool)
+    queue = await get_queue()
+    await queue.enqueue_job(
+        'run_ingest',
+        str(material_id),
+        minio_key
+    )
 
     return {"id": str(material_id), "status": "pending"}
 

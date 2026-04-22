@@ -133,7 +133,7 @@ export default function LibraryPage() {
                   material={m}
                   isSelected={selected?.id === m.id}
                   onClick={() => setSelected(s => s?.id === m.id ? null : m)}
-                  onStudy={() => navigate(`/study/${m.id}`)}
+                  onStudy={() => navigate(`/sessions/new?material=${m.id}`)}
                 />
               ))}
             </div>
@@ -145,7 +145,7 @@ export default function LibraryPage() {
           <MaterialDetail
             material={selected}
             onClose={() => setSelected(null)}
-            onStudy={() => navigate(`/study/${selected.id}`)}
+            onStudy={() => navigate(`/sessions/new?material=${m.id}`)}
           />
         )}
       </div>

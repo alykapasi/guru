@@ -21,10 +21,15 @@ help:
 
 # ── Infrastructure ─────────────────────────────────────────────────────────
 db-up:
-	docker compose up -d postgres minio
-	@echo "Waiting for Postgres to be healthy..."
+	docker compose up -d postgres minio redis
+	@echo "Waiting for Postgres..."
 	@until docker compose exec postgres pg_isready -U guru > /dev/null 2>&1; do sleep 1; done
-	@echo "Postgres is ready."
+	@echo "Waiting for Redis..."
+	@until docker compose exec redis redis-cli ping > /dev/null 2>&1; do sleep 1; done
+	@echo "All services ready."
+
+worker:
+	cd backend && uv run arq app.worker.WorkerSettings
 
 db-down:
 	docker compose stop postgres minio

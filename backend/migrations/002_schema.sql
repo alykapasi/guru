@@ -57,7 +57,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 
 -- ANN index - cosine similarity, use ivfflat for v0
 -- Run AFTER inserting data, not before
-CREATE INDEX chunks_embedding_idx
+CREATE INDEX IF NOT EXISTS chunks_embedding_idx
     ON chunks USING ivfflat (embedding vector_cosine_ops)
     WITH (lists = 100);
 
