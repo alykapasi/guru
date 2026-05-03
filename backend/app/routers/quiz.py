@@ -12,7 +12,7 @@ from app.services.retrieval import build_teaching_context
 router = APIRouter(prefix="/quiz", tags=["quiz"])
 
 class QuizRequest(BaseModel):
-    material_id: uuid.UUID
+    session_id: uuid.UUID
     topic: str | None = None
     n_questions: int = 8
 
@@ -40,7 +40,7 @@ async def generate_quiz(req: QuizRequest, user=Depends(get_current_user), pool=D
         raise HTTPException(400, "No materials in this session")
     
     query = req.topic or "key concepts across the all materials"
-    ctx = await build_teaching_context(query, req.material_id, str(user["id"]), pool)
+    ctx = await build_teaching_context(query, material_ids, str(user["id"]), pool)
 
     from app.prompts.quiz import build_quiz_prompt
     prompt = build_quiz_prompt(ctx, req.topic, req.n_questions)

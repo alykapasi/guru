@@ -398,50 +398,97 @@ function RightPanel({ collapsed, onToggle, tab, onTabChange, sessionId }) {
 
 // ── Lesson Tab ─────────────────────────────────────────────────────────────
 function LessonTab({ sessionId }) {
-  const [topic, setTopic] = useState('')
-  const [lesson, setLesson] = useState('')
-  const [loading, setLoading] = useState(false)
+    const [topic, setTopic] = useState('')
+    const [lesson, setLesson] = useState('')
+    const [loading, setLoading] = useState(false)
+    const [confidence, setConfidence] = useState(null)
+    const [reportSaved, setReportSaved] = useState(false)
 
-  async function generate() {
-    setLoading(true)
-    setLesson('')
-    try {
-      const res = await api.lessons.generate(sessionId, topic || undefined)
-      setLesson(res.lesson_markdown)
-    } finally {
-      setLoading(false)
+    async function generate() {
+        setLoading(true)
+        setLesson('')
+        setConfidence(null)
+        setReportSaved(false)
+        try {
+            const res = await api.lessons.generate(sessionId, topic || undefined)
+            setLesson(res.lesson_markdown)
+        } finally {
+            setLoading(false)
+        }
     }
-  }
 
-  return (
-    <div className="p-4 space-y-3">
-      <input
-        value={topic} onChange={e => setTopic(e.target.value)}
-        placeholder={loading ? "Guru is thinking..." : "Ask a question..."}
-        className="w-full bg-[#0f0f13] border border-[#2e2e3a] rounded-lg px-3 py-2
-                   text-white placeholder-slate-500 focus:outline-none
-                   focus:border-violet-500 text-xs" />
-      <button onClick={generate} disabled={loading}
-        className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-40
-                   text-white py-2 rounded-lg text-xs font-medium transition-colors">
-        {loading ? 'Generating...' : 'Generate lesson'}
-      </button>
+    async function saveConfidence(level) {
+        setConfidence(level)
+        try {
+            await api.profile.selfReport(sessionId, topic || 'general', level)
+            setReportSaved(true)
+        } catch {
+            // non-critical, don't surface error
+        }
+    }
 
-      {lesson && (
-        <div className="mt-2 text-slate-300">
-          <div className="prose prose-invert prose-xs max-w-none text-xs leading-relaxed">
-            <ReactMarkdown>{lesson}</ReactMarkdown>
-          </div>
+    return (
+        <div className="p-4 space-y-3">
+            <input value={topic} onChange={e => setTopic(e.target.value)}
+                placeholder="Topic (optional)"
+                className="w-full bg-[#0f0f13] border border-[#2e2e3a] rounded-lg px-3 py-2
+                           text-white placeholder-slate-500 focus:outline-none
+                           focus:border-violet-500 text-xs" />
+            <button onClick={generate} disabled={loading}
+                className="w-full bg-violet-600 hover:bg-violet-500 disabled:opacity-40
+                           text-white py-2 rounded-lg text-xs font-medium transition-colors">
+                {loading ? 'Generating...' : 'Generate lesson'}
+            </button>
+
+            {lesson && (
+                <>
+                    <div className="mt-2 text-slate-300">
+                        <div className="prose prose-invert prose-xs max-w-none text-xs leading-relaxed">
+                            <ReactMarkdown>{lesson}</ReactMarkdown>
+                        </div>
+                    </div>
+
+                    {/* Self-report confidence */}
+                    <div className="border-t border-[#1e1e2a] pt-3 mt-3">
+                        {reportSaved ? (
+                            <p className="text-slate-500 text-xs text-center">
+                                ✓ Confidence saved
+                            </p>
+                        ) : (
+                            <>
+                                <p className="text-slate-400 text-xs mb-2 text-center">
+                                    How confident do you feel about this?
+                                </p>
+                                <div className="flex gap-1.5">
+                                    {[
+                                        { level: 1, label: 'Lost' },
+                                        { level: 2, label: 'Unsure' },
+                                        { level: 3, label: 'Getting it' },
+                                        { level: 4, label: 'Solid' },
+                                    ].map(({ level, label }) => (
+                                        <button key={level}
+                                            onClick={() => saveConfidence(level)}
+                                            className={`flex-1 py-1.5 rounded-lg text-xs transition-colors border
+                                                ${confidence === level
+                                                    ? 'bg-violet-600 border-violet-500 text-white'
+                                                    : 'bg-[#0f0f13] border-[#2e2e3a] text-slate-400 hover:border-violet-500'}`}>
+                                            {label}
+                                        </button>
+                                    ))}
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </>
+            )}
+
+            {!lesson && !loading && (
+                <p className="text-slate-600 text-xs text-center pt-4">
+                    Generate a lesson on any topic from this material
+                </p>
+            )}
         </div>
-      )}
-
-      {!lesson && !loading && (
-        <p className="text-slate-600 text-xs text-center pt-4">
-          Generate a lesson on any topic from this material
-        </p>
-      )}
-    </div>
-  )
+    )
 }
 
 // ── Quiz Tab ───────────────────────────────────────────────────────────────
@@ -473,7 +520,7 @@ function QuizTab({ sessionId }) {
       const res = await api.quiz.submit(attemptId, answers)
       setResults(res)
       qc.invalidateQueries({ queryKey: ['wiki'] })
-      qc.invalidateQueries({ queryKey: ['mastery', materialId] })
+    //   qc.invalidateQueries({ queryKey: ['mastery', materialId] })
     } finally {
       setLoading(false)
     }

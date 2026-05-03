@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     context_text TEXT NOT NULL,
     full_text TEXT NOT NULL,
     token_count INT,
-    embedding vector(1024),
+    embedding vector(768),
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

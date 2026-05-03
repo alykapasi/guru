@@ -140,7 +140,7 @@ function ConceptRow({ entry: e, isSelected, onClick }) {
                     ? 'bg-violet-600/15 text-violet-300'
                     : 'text-slate-400 hover:bg-[#1a1a24] hover:text-white'}`}>
       <span className="text-xs truncate mr-2">{e.concept}</span>
-      <MasteryDot score={e.score} />
+      <MasteryDot score={e.irt_score} />
     </button>
   )
 }
@@ -153,14 +153,14 @@ function MasteryDot({ score }) {
 }
 
 function ConceptDetail({ entry: e, onStudy }) {
-  const scorePercent = Math.round(e.score * 100)
-  const lastTested = new Date(e.last_tested).toLocaleDateString(undefined, {
+  const scorePercent = Math.round(e.irt_score * 100)
+  const lastTested = new Date(e.last_updated).toLocaleDateString(undefined, {
     month: 'long', day: 'numeric', year: 'numeric'
   })
 
-  const strength = e.score >= 0.8 ? 'Strong' : e.score >= 0.5 ? 'Developing' : 'Needs work'
-  const strengthColor = e.score >= 0.8 ? 'text-emerald-400'
-    : e.score >= 0.5 ? 'text-yellow-400'
+  const strength = e.irt_score >= 0.8 ? 'Strong' : e.irt_score >= 0.5 ? 'Developing' : 'Needs work'
+  const strengthColor = e.irt_score >= 0.8 ? 'text-emerald-400'
+    : e.irt_score >= 0.5 ? 'text-yellow-400'
     : 'text-red-400'
 
   return (
@@ -185,8 +185,8 @@ function ConceptDetail({ entry: e, onStudy }) {
         <div className="h-2 bg-[#0f0f13] rounded-full overflow-hidden mb-3">
           <div
             className={`h-full rounded-full transition-all
-              ${e.score >= 0.8 ? 'bg-emerald-500'
-                : e.score >= 0.5 ? 'bg-yellow-500'
+              ${e.irt_score >= 0.8 ? 'bg-emerald-500'
+                : e.irt_score >= 0.5 ? 'bg-yellow-500'
                 : 'bg-red-500'}`}
             style={{ width: `${scorePercent}%` }}
           />
@@ -199,12 +199,12 @@ function ConceptDetail({ entry: e, onStudy }) {
 
       {/* Status card */}
       <div className={`rounded-xl p-4 mb-5 border text-sm
-        ${e.score >= 0.8
+        ${e.irt_score >= 0.8
           ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-300'
-          : e.score >= 0.5
+          : e.irt_score >= 0.5
           ? 'bg-yellow-500/5 border-yellow-500/20 text-yellow-300'
           : 'bg-red-500/5 border-red-500/20 text-red-300'}`}>
-        {e.score >= 0.8 && (
+        {e.irt_score >= 0.8 && (
           <>
             <p className="font-medium mb-1">You know this well</p>
             <p className="text-xs opacity-75">
@@ -213,7 +213,7 @@ function ConceptDetail({ entry: e, onStudy }) {
             </p>
           </>
         )}
-        {e.score >= 0.5 && e.score < 0.8 && (
+        {e.irt_score >= 0.5 && e.irt_score < 0.8 && (
           <>
             <p className="font-medium mb-1">You're getting there</p>
             <p className="text-xs opacity-75">
@@ -222,7 +222,7 @@ function ConceptDetail({ entry: e, onStudy }) {
             </p>
           </>
         )}
-        {e.score < 0.5 && (
+        {e.irt_score < 0.5 && (
           <>
             <p className="font-medium mb-1">This needs more attention</p>
             <p className="text-xs opacity-75">

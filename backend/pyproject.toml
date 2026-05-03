@@ -15,6 +15,7 @@ dependencies = [
     "pgvector>=0.4.2",
     "pydantic>=2.12.5",
     "pydantic-settings>=2.13.1",
+    "pymupdf>=1.27.2.3",
     "python-jose[cryptography]>=3.5.0",
     "python-multipart>=0.0.22",
     "redis>=5.3.1",

@@ -155,6 +155,17 @@ async def chat_message(
                     [uuid.UUID(c) for c in chunk_ids] if chunk_ids else []
                 )
 
+        async with pool.acquire() as conn:
+            msg_count = await conn.fetchval(
+                "SELECT COUNT(*) FROM messages WHERE session_id=$1 AND role='assistant'",
+                req.session_id
+            )
+
+        if msg_count % 5 == 0:
+            import asyncio
+            from app.services.mastery import CHAT_ASSESSMENT_INTERVAL, assess_chat_mastery
+            asyncio.create_task(assess_chat_mastery(req.session_id, material_ids, pool))
+
         return {"reply": reply, "chunk_ids": ctx["chunk_ids"]}
     
 @router.get("/sessions")

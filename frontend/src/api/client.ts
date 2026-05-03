@@ -1,5 +1,7 @@
 // src/api/client.ts
 
+import { sanitizeInput, sanitizeAnswers } from '../utils/sanitize'
+
 const BASE_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:8000'
 
 function getToken() { return localStorage.getItem('token') }
@@ -42,6 +44,13 @@ export const api = {
         },
         list: () => request('/materials/'),
         get:  (id: string) => request(`/materials/${id}`),
+        rename: (id: string, title: string) =>
+            request(`/materials/${id}/rename`, {
+                method: "PATCH",
+                body: JSON.stringify({ title })
+            }),
+        delete: (id: string) =>
+            request(`/materials/${id}`, { method: "DELETE" }),
     },
     sessions: {
         create: (material_ids: string[], goal: string) =>
@@ -61,14 +70,14 @@ export const api = {
         message: (session_id: string, message: string) =>
             request('/chat/message', {
                 method: 'POST',
-                body: JSON.stringify({ session_id, message })
+                body: JSON.stringify({ session_id, message: sanitizeInput(message) })
             }),
     },
     lessons: {
         generate: (session_id: string, topic?: string) =>
             request('/lesson/generate', {
                 method: 'POST',
-                body: JSON.stringify({ session_id, topic })
+                body: JSON.stringify({ session_id, topic: topic ? sanitizeInput(topic) : undefined })
             }),
         checklist: (session_id: string, goal: string) =>
             request('/lesson/checklist', {
@@ -85,7 +94,7 @@ export const api = {
         submit: (quiz_attempt_id: string, answers: Record<string, string>) =>
             request('/quiz/submit', {
                 method: 'POST',
-                body: JSON.stringify({ quiz_attempt_id, answers })
+                body: JSON.stringify({ quiz_attempt_id, answers: sanitizeAnswers(answers) })
             }),
     },
     profile: {
@@ -94,5 +103,10 @@ export const api = {
         get: () => request('/profile/'),
         mastery: (material_id: string) => request(`/profile/mastery/${material_id}`),
         wiki: () => request('/profile/wiki'),
+        selfReport: (session_id: string, concept: string, confidence: number) =>
+            request('/profile/mastery/self-report', {
+                method: 'POST',
+                body: JSON.stringify({ session_id, concept, confidence })
+            }),
     },
 }

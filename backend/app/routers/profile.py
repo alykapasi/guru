@@ -1,6 +1,6 @@
 # app/routers/profile.py
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 import uuid
 
@@ -14,6 +14,11 @@ class OnboardingAnswers(BaseModel):
     goal: str           # exam | deep | overview | work
     session_length: str # lt15 | 15-30 | 30-60 | gt60
     tone: str           # concise | detailed | conversational | formal
+
+class SelfReportRequest(BaseModel):
+    material_id: uuid.UUID
+    concept: str
+    confidence: int
 
 @router.post("/onboarding")
 async def save_onboarding(
@@ -67,7 +72,7 @@ async def get_mastery(
     return [dict(r) for r in rows]
 
 @router.get("/wiki")
-async def gett_wiki(
+async def get_wiki(
     user = Depends(get_current_user),
     pool = Depends(get_pool),
 ):
@@ -75,14 +80,40 @@ async def gett_wiki(
         rows = await conn.fetch(
             """
             SELECT
-                ms.concept, ms.score, ms.attempts, ms.last_tested,
+                ms.concept, ms.theta, ms.irt_score, ms.llm_score,
+                ms.self_score, ms.attempts, ms.last_quiz_at, ms.last_updated,
                 m.title AS material_title, m.id AS material_id
             FROM mastery_scores ms
             JOIN materials m
                 ON m.id = ms.material_id
             WHERE ms.user_id = $1
-            ORDER BY ms.score ASC
+            ORDER BY ms.irt_score ASC
             """,
             str(user["id"])
         )
     return [dict(r) for r in rows]
+
+@router.post("/mastery/self-report")
+async def self_report(
+    req: SelfReportRequest,
+    user = Depends(get_current_user),
+    pool = Depends(get_pool),
+):
+    async with pool.acquire() as conn:
+        material_rows = await conn.fetch(
+            "SELECT material_id FROM session_materials WHERE session_id=$1",
+            req.session_id
+        )
+    if not material_rows:
+        raise HTTPException(400, "No materials in session")
+    
+    # apply self report to first material in this concept
+    # (or all materials in the session)
+    from app.services.mastery import update_self_report
+    for row in material_rows:
+        await update_self_report(
+            str(user["id"]), row["material_id"],
+            req.concept, req.confidence, pool, req.session_id
+        )
+
+    return {"status": "updated"}

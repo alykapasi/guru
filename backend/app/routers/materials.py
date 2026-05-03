@@ -1,12 +1,16 @@
 # app/routers/materials.py
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from pydantic import BaseModel
 import uuid
 
 from app.auth import get_current_user
 from app.db import get_pool
 from app.queue import get_queue
 from app.services.storage import upload_to_minio
+
+class RenameRequest(BaseModel):
+    title: str
 
 router = APIRouter(prefix="/materials", tags=["materials"])
 
@@ -22,6 +26,8 @@ async def upload_materials(
     # 1. stream file to minio
     await upload_to_minio(minio_key, file)
 
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in file.filename else "unknown"
+
     # 2. insert materials row
     async with pool.acquire() as conn:
         await conn.execute(
@@ -30,9 +36,7 @@ async def upload_materials(
             VALUES ($1, $2, $3, $4, $5, $6, 'pending')""",
             material_id, str(user["id"]),
             file.filename.rsplit('.', 1)[0],
-            file.filename,
-            file.filename.rsplit('.', 1)[-1].lower(),
-            minio_key
+            file.filename, ext, minio_key
         )
 
     # 3. background ingestion (non-blocking)
@@ -53,7 +57,9 @@ async def list_materials(
     async with pool.acquire() as conn:
         rows = await conn.fetch(
             """
-            SELECT id, title, filename, status, created_at, concepts
+            SELECT 
+                id, title, filename, status, created_at, concepts,
+                file_type, parent_material_id::text, sub_doc_count, page_range
             FROM materials
             WHERE user_id=$1
             ORDER BY created_at DESC
@@ -79,3 +85,55 @@ async def get_material(
     if not row:
         raise HTTPException(status_code=404, detail="Material not found")
     return dict(row)
+
+@router.patch("/{material_id}/rename")
+async def rename_material(
+    material_id: uuid.UUID,
+    req: RenameRequest,
+    user=Depends(get_current_user),
+    pool=Depends(get_pool),
+):
+    if not req.title.strip():
+        raise HTTPException(400, "Title cannot be empty")
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE materials SET title=$1 WHERE id=$2 AND user_id=$3",
+            req.title.strip(), material_id, str(user["id"])
+        )
+    if result == "UPDATE 0":
+        raise HTTPException(404, "Material not found")
+    return {"status": "renamed"}
+
+@router.delete("/{material_id}")
+async def delete_material(
+    material_id: uuid.UUID,
+    user=Depends(get_current_user),
+    pool=Depends(get_pool),
+):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT minio_key FROM materials
+            WHERE (id=$1 OR parent_material_id=$1) AND user_id=$2
+            """,
+            material_id, str(user["id"])
+        )
+        if not rows:
+            raise HTTPException(404, "Material not found")
+        
+        await conn.execute(
+            "DELETE FROM materials WHERE (id=$1 OR parent_material_id=$1) AND user_id=$2",
+            material_id, str(user["id"])
+        )
+
+    # delete from minio (best effort)
+    from app.services.storage import s3
+    from app.config import settings
+
+    for row in rows:
+        try:
+            s3.delete_object(Bucket=settings.minio_bucket, Key=row["minio_key"])
+        except Exception:
+            pass
+
+    return {"status": "deleted"}

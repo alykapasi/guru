@@ -52,6 +52,38 @@ async def _chat_with_system(
     )
     return response.choices[0].message.content.strip()
 
+async def _chat_vision(
+        model: str,
+        prompt: str,
+        image_b64: str,
+        media_type: str = "image/jpeg",
+        max_tokens: int = 2000,
+) -> str:
+    """vision call - sends image + text prompt to create a multimodal model"""
+    response = await client.chat.completions.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{media_type};base64,{image_b64}"
+                    }
+                },
+                {
+                    "type": "text",
+                    "text": prompt
+                }
+            ]
+        }]
+    )
+    content = response.choices[0].message.content
+    if not content:
+        raise ValueError(f"Empty vision response from {model}")
+    return content.strip()
+
 async def generate_context_prefix(
         document_summary: str,
         chunk_text: str,

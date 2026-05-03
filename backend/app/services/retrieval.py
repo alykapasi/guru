@@ -49,6 +49,7 @@ async def build_teaching_context(
     user_id: str,
     pool,
 ) -> dict:
+    resolved_ids = await resolve_material_ids(material_ids, pool)
     chunks = await retrieve_chunks(query, material_ids, pool)
 
     async with pool.acquire() as conn:
@@ -56,9 +57,9 @@ async def build_teaching_context(
             "SELECT answers FROM learner_profiles WHERE user_id=$1", user_id
         )
         mastery_rows = await conn.fetch(
-            """SELECT concept, score FROM mastery_scores
+            """SELECT concept, irt_score AS score FROM mastery_scores
                WHERE user_id=$1 AND material_id = ANY($2::uuid[])
-               ORDER BY score ASC""",
+               ORDER BY irt_score ASC""",
             user_id, material_ids
         )
         material_rows = await conn.fetch(
@@ -90,3 +91,16 @@ async def build_teaching_context(
         "strong_concepts":       strong,
         "all_concepts":          all_concepts,
     }
+
+async def resolve_material_ids(material_ids: list[uuid.UUID], pool) -> list[uuid.UUID]:
+    """expand parent ids to include all ready sub-document ids"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """
+            SELECT id FROM materials
+            WHERE (id = ANY($1::uuid[]) OR parent_material_id = ANY($1::uuid[]))
+            AND status = 'ready'
+            """,
+            material_ids
+        )
+    return [r["id"] for r in rows] or material_ids
