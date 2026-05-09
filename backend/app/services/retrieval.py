@@ -17,16 +17,18 @@ async def retrieve_chunks(
         rows = await conn.fetch(
             """
             SELECT
-                c.id,
-                c.raw_text,
-                c.context_text,
-                c.heading_path,
-                m.title AS material_title,
-                1 - (c.embedding <=> $1::vector) AS similarity
+                c.id, c.raw_text, c.context_text, c.heading_path,
+                c.chunk_type,
+                COALESCE(parent.title, m.title) AS material_title,
+                CASE c.chunk_type
+                    WHEN 'borderline' THEN (1 - (c.embedding <=> $1::vector)) * 0.6
+                    ELSE 1 - (c.embedding <=> $1::vector)
+                END AS score
             FROM chunks c
             JOIN materials m ON m.id = c.material_id
+            LEFT JOIN materials parent on parent.id = m.parent_material_id
             WHERE c.material_id = ANY($2::uuid[])
-            ORDER BY c.embedding <=> $1::vector
+            ORDER BY score DESC
             LIMIT $3
             """,
             embedding_str, material_ids, top_k
@@ -39,7 +41,7 @@ def format_chunks_for_prompt(chunks: list[dict]) -> str:
     for i, chunk in enumerate(chunks, 1):
         path = " > ".join(chunk["heading_path"]) if chunk["heading_path"] else "Introduction"
         title = chunk.get("material_title", "")
-        parts.append(f"[Source {i}: {title} — {path}]\n{chunk['raw_text']}")
+        parts.append(f"[{i}] {title} — {path}\n{chunk['raw_text']}")
     return "\n\n---\n\n".join(parts)
 
 
@@ -50,7 +52,7 @@ async def build_teaching_context(
     pool,
 ) -> dict:
     resolved_ids = await resolve_material_ids(material_ids, pool)
-    chunks = await retrieve_chunks(query, material_ids, pool)
+    chunks = await retrieve_chunks(query, resolved_ids, pool)
 
     async with pool.acquire() as conn:
         profile_row = await conn.fetchrow(
@@ -60,7 +62,7 @@ async def build_teaching_context(
             """SELECT concept, irt_score AS score FROM mastery_scores
                WHERE user_id=$1 AND material_id = ANY($2::uuid[])
                ORDER BY irt_score ASC""",
-            user_id, material_ids
+            user_id, resolved_ids
         )
         material_rows = await conn.fetch(
             "SELECT title, concepts FROM materials WHERE id = ANY($1::uuid[])",
@@ -85,6 +87,7 @@ async def build_teaching_context(
         "source_material_title": " + ".join(titles),
         "retrieved_chunks":      format_chunks_for_prompt(chunks),
         "chunk_ids":             [str(c["id"]) for c in chunks],
+        "chunks":                chunks,
         "profile":               profile,
         "mastery":               mastery,
         "weak_concepts":         weak,

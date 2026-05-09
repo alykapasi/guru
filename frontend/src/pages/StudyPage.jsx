@@ -4,7 +4,9 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import ReactMarkdown from 'react-markdown'
+
 import { api } from '../api/client'
+import CitedMessage from '../components/CitedMessage'
 
 export default function StudyPage() {
     const { sessionId } = useParams()
@@ -253,8 +255,12 @@ function ChatPanel({ sessionId, goal }) {
             api.sessions.messages(sessionId)
                 .then(history => {
                     setMessages(history.length > 0
-                        ? history.map(m => ({ role: m.role, content: m.content }))
-                        : [{ role: 'assistant', content: 'Welcome back! Where would you like to continue?' }]
+                        ? history.map(m => ({
+                            role: m.role,
+                            content: m.content,
+                            citations: m.citations ?? [],   // was hardcoded []
+                        }))
+                        : [{ role: 'assistant', content: 'Welcome back! Where would you like to continue?', citations: [] }]
                     )
                 })
                 .catch(() => setMessages([{
@@ -281,7 +287,9 @@ function ChatPanel({ sessionId, goal }) {
         setLoading(true)
         try {
             const res = await api.chat.message(sessionId, userMsg)
-            setMessages(m => [...m, { role: 'assistant', content: res.reply }])
+            console.log('raw reply:', res.reply)
+            console.log('citations:', res.citations)
+            setMessages(m => [...m, { role: 'assistant', content: res.reply, citations: res.citations ?? [], }])
         } catch (err) {
             setMessages(m => [...m, { role: 'assistant', content: 'Something went wrong. Try again.' }])
         } finally {
@@ -306,9 +314,7 @@ function ChatPanel({ sessionId, goal }) {
                                 ? 'bg-violet-600 text-white'
                                 : 'bg-[#1a1a24] border border-[#2e2e3a] text-slate-200'}`}>
                             {m.role === 'assistant'
-                                ? <div className="prose prose-invert prose-sm max-w-none">
-                                    <ReactMarkdown>{m.content}</ReactMarkdown>
-                                  </div>
+                                ? <CitedMessage content={m.content} citations={m.citations ?? []} />
                                 : m.content}
                         </div>
                     </div>
@@ -371,13 +377,13 @@ function RightPanel({ collapsed, onToggle, tab, onTabChange, sessionId }) {
                  className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize
                             hover:bg-violet-500/50 transition-colors z-10" />
             <div className="flex border-b border-[#1e1e2a]">
-                {['lesson', 'quiz'].map(t => (
+                {['lesson', 'quiz', 'cards'].map(t => (
                     <button key={t} onClick={() => onTabChange(t)}
                         className={`flex-1 py-3 text-xs font-medium capitalize transition-colors border-b-2
                             ${tab === t
                                 ? 'border-violet-500 text-violet-300'
                                 : 'border-transparent text-slate-500 hover:text-white'}`}>
-                        {t}
+                        {t === 'cards' ? '🃏' : t}
                     </button>
                 ))}
                 <button onClick={onToggle}
@@ -390,6 +396,9 @@ function RightPanel({ collapsed, onToggle, tab, onTabChange, sessionId }) {
                 </div>
                 <div style={{ display: tab === 'quiz' ? 'block' : 'none' }}>
                     <QuizTab sessionId={sessionId} />
+                </div>
+                <div style={{ display: tab === 'cards' ? 'block' : 'none' }}>
+                    <FlashcardTab sessionId={sessionId} />
                 </div>
             </div>
         </div>
@@ -625,4 +634,138 @@ function QuizTab({ sessionId }) {
       </button>
     </div>
   )
+}
+
+// ── Flashcard Tab ───────────────────────────────────────────────────────────────
+
+function FlashcardTab({ sessionId }) {
+    const [cards, setCards] = useState(null)
+    const [current, setCurrent] = useState(0)
+    const [flipped, setFlipped] = useState(false)
+    const [generating, setGenerating] = useState(false)
+    const [done, setDone] = useState(false)
+    const [topic, setTopic] = useState('')
+
+    async function generate() {
+        setGenerating(true)
+        setCards(null); setDone(false); setCurrent(0); setFlipped(false)
+        try {
+            const res = await api.flashcards.generate(sessionId, topic || undefined, 8)
+            if (res.cards.length === 0) {
+                setDone(true)
+            } else {
+                setCards(res.cards)
+            }
+        } finally {
+            setGenerating(false)
+        }
+    }
+
+    async function rate(grade) {
+        const card = cards[current]
+        await api.flashcards.review(card.id, grade)
+        setFlipped(false)
+        if (current + 1 >= cards.length) {
+            setDone(true)
+        } else {
+            setCurrent(i => i + 1)
+        }
+    }
+
+    if (generating) return (
+        <div className="flex items-center justify-center h-32">
+            <span className="text-slate-500 text-xs">Generating flashcards...</span>
+        </div>
+    )
+
+    if (!cards) return (
+        <div className="p-4 space-y-3">
+            <input value={topic} onChange={e => setTopic(e.target.value)}
+                placeholder="Topic (optional)"
+                className="w-full bg-[#0f0f13] border border-[#2e2e3a] rounded-lg px-3 py-2
+                           text-white placeholder-slate-500 focus:outline-none
+                           focus:border-violet-500 text-xs" />
+            <button onClick={generate}
+                className="w-full bg-violet-600 hover:bg-violet-500 text-white py-2
+                           rounded-lg text-xs font-medium transition-colors">
+                Generate flashcards
+            </button>
+            <p className="text-slate-600 text-xs text-center pt-2">
+                Cards are scheduled using spaced repetition
+            </p>
+        </div>
+    )
+
+    if (done) return (
+        <div className="p-4 text-center space-y-3">
+            <div className="text-3xl mb-2">✓</div>
+            <p className="text-white font-medium text-sm">Session complete</p>
+            <p className="text-slate-500 text-xs">
+                {cards.length} cards reviewed. Cards are scheduled for future review.
+            </p>
+            <button onClick={() => { setCards(null); setDone(false) }}
+                className="w-full border border-[#2e2e3a] hover:border-violet-500
+                           text-slate-400 py-2 rounded-lg text-xs transition-colors mt-2">
+                Generate new cards
+            </button>
+        </div>
+    )
+
+    const card = cards[current]
+
+    return (
+        <div className="p-4 space-y-3">
+            {/* Progress */}
+            <div className="flex items-center justify-between">
+                <span className="text-slate-500 text-xs">{card.concept}</span>
+                <span className="text-slate-600 text-xs">
+                    {current + 1}/{cards.length}
+                </span>
+            </div>
+            <div className="h-1 bg-[#1e1e2a] rounded-full overflow-hidden">
+                <div className="h-full bg-violet-500 rounded-full transition-all"
+                     style={{ width: `${((current) / cards.length) * 100}%` }} />
+            </div>
+
+            {/* Card */}
+            <div
+                onClick={() => !flipped && setFlipped(true)}
+                className={`rounded-xl border p-4 min-h-[140px] flex flex-col
+                            justify-between transition-all cursor-pointer
+                            ${flipped
+                                ? 'bg-violet-600/10 border-violet-500/30'
+                                : 'bg-[#0f0f13] border-[#2e2e3a] hover:border-[#3e3e4a]'}`}>
+                <div>
+                    <p className="text-slate-500 text-xs mb-2 uppercase tracking-wider">
+                        {flipped ? 'Answer' : 'Question'}
+                    </p>
+                    <p className="text-white text-xs leading-relaxed">
+                        {flipped ? card.back : card.front}
+                    </p>
+                </div>
+                {!flipped && (
+                    <p className="text-slate-600 text-xs text-center mt-3">
+                        Tap to reveal answer
+                    </p>
+                )}
+            </div>
+
+            {/* Grade buttons */}
+            {flipped && (
+                <div className="grid grid-cols-4 gap-1.5">
+                    {[
+                        { grade: 0, label: 'Again', color: 'border-red-500/40 text-red-400 hover:bg-red-500/10' },
+                        { grade: 1, label: 'Hard',  color: 'border-orange-500/40 text-orange-400 hover:bg-orange-500/10' },
+                        { grade: 2, label: 'Good',  color: 'border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10' },
+                        { grade: 3, label: 'Easy',  color: 'border-blue-500/40 text-blue-400 hover:bg-blue-500/10' },
+                    ].map(({ grade, label, color }) => (
+                        <button key={grade} onClick={() => rate(grade)}
+                            className={`py-2 rounded-lg text-xs font-medium border transition-colors ${color}`}>
+                            {label}
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    )
 }

@@ -6,6 +6,7 @@ from docling.datamodel.base_models import InputFormat, DocItemLabel
 import fitz
 import math
 import pathlib
+import re
 import tempfile
 import uuid
 
@@ -20,6 +21,32 @@ SUB_DOC_PAGE_LIMIT = 25
 IMAGE_TYPES = {".jpg", ".jpeg", ".png", ".webp"}
 TEXT_TYPES = {".txt", ".md", ".markdown"}
 DOC_TYPES = {".pdf", ".docx", ".pptx"}
+SKIP_LABELS = {"page_header", "page_footer", "footnote"}
+JUNK_HEADING_PATTERNS = [
+    r'^acknowledgements?$', r'^preface$', r'^foreword$',
+    r'^dedication$', r'^copyright', r'^table of contents$',
+    r'^contents$', r'^index$', r'^about the author',
+    r'^colophon$', r'^list of (figures|tables|abbreviations)', 
+]
+BORDERLINE_HEADING_PATTERNS = [
+    r'^references?$', r'^bibliography$', r'^appendix',
+    r'^glossary$', r'^notes?$', r'^further reading$',
+    r'^works cited$', r'^endnotes?$',
+]
+
+def classify_section(heading_path: list[str], label: str) -> str:
+    """Returns 'skip', 'borderline', or 'normal'."""
+    label_lower = (label or "").lower().replace(" ", "_")
+    if label_lower in SKIP_LABELS:
+        return "skip"
+    heading_text = " ".join(heading_path).lower().strip()
+    for pattern in JUNK_HEADING_PATTERNS:
+        if re.search(pattern, heading_text):
+            return "skip"
+    for pattern in BORDERLINE_HEADING_PATTERNS:
+        if re.search(pattern, heading_text):
+            return "borderline"
+    return "normal"
 
 def get_ingestion_strategy(filename: str) -> str:
     ext = pathlib.Path(filename).suffix.lower()
@@ -105,11 +132,12 @@ async def _run_ingestion(material_id: uuid.UUID, minio_key: str, pool):
                 await conn.execute(
                     """INSERT INTO chunks
                        (id, material_id, chunk_index, heading_path,
-                        raw_text, context_text, full_text, embedding)
-                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::vector)""",
+                        raw_text, context_text, full_text, embedding, chunk_type)
+                       VALUES ($1,$2,$3,$4,$5,$6,$7,$8::vector, $9)""",
                     uuid.uuid4(), material_id, i,
                     chunk["heading_path"], chunk["text"],
-                    chunk["context_text"], chunk["full_text"], str(emb)
+                    chunk["context_text"], chunk["full_text"],
+                    str(emb), chunk.get("chunk_type", "normal"),
                 )
             await conn.execute(
                 "UPDATE materials SET status='ready', concepts=$1 WHERE id=$2",
@@ -125,19 +153,20 @@ def _chunk_document(doc) -> list[dict]:
     each chunk keeps its heading_path (breadcrumb) for context
     """
     chunks = []
-    # docling exports to a list of elements with .label and .text
-    # labels: 'section_header', 'text', 'list_item', 'table', 'figure_caption'
     current_heading_path = []
     current_section_text = []
+    current_section_type = "normal"
 
-    def flush(heading_path, text_parts):
+    def flush(heading_path, text_parts, section_type):
         if not text_parts:
             return
         full = " ".join(text_parts).strip()
         if len(full) < 80:
             return
         # split if too long
-        chunks.extend(_split_if_long(full, heading_path[:]))
+        for chunk in _split_if_long(full, heading_path[:]):
+            chunk["chunk_type"] = section_type
+            chunks.append(chunk)
 
     for element, _level in doc.iterate_items():
         label = getattr(element, "label", None)
@@ -146,18 +175,30 @@ def _chunk_document(doc) -> list[dict]:
         if not text:
             continue
 
+        label_str = str(label).lower().replace("docitemlabel.", "").replace(" ", "_") \
+                    if label else ""
+        
+        # always skip structural noise regardless of heading
+        if label_str in SKIP_LABELS:
+            continue
+
         if label == DocItemLabel.SECTION_HEADER:
-            # flush current section before starting a new one
-            flush(current_heading_path[:], current_section_text[:])
+            # flush current section before starting new one
+            flush(current_heading_path[:], current_section_text[:], current_section_type)
             current_section_text = []
-            # docling provides heading level on the element
+
             level = getattr(element, "level", 1) or 1
-            # trim path to current level and append new heading
             current_heading_path = current_heading_path[:level-1] + [text]
+
+            # classify the new section
+            current_section_type = classify_section(current_heading_path, label_str)
+
         else:
+            if current_section_type == "skip":
+                continue
             current_section_text.append(text)
 
-    flush(current_heading_path, current_section_text)
+    flush(current_heading_path, current_section_text, current_section_type)
     return chunks
 
 def _split_if_long(text: str, heading_path: list[str]) -> list[dict]:

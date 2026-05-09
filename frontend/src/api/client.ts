@@ -109,4 +109,29 @@ export const api = {
                 body: JSON.stringify({ session_id, concept, confidence })
             }),
     },
+    flashcards: {
+        generate: (session_id: string, concept?: string, n_cards = 10) =>
+            request('/flashcards/generate', {
+                method: 'POST',
+                body: JSON.stringify({ session_id, concept, n_cards })
+            }),
+        due: (session_id?: string, limit = 50) => {
+            const params = new URLSearchParams({ limit: String(limit) })
+            if (session_id) params.set('session_id', session_id)
+            return request(`/flashcards/due?${params.toString()}`)
+        },
+        all: (session_id?: string) => {
+            const params = new URLSearchParams()
+            if (session_id) params.set('session_id', session_id)
+            const qs = params.toString()
+            return request(`/flashcards/all${qs ? `?${qs}` : ''}`)
+        },
+        review: (card_id: string, grade: number) =>
+            request(`/flashcards/${card_id}/review`, {
+                method: 'POST',
+                body: JSON.stringify({ grade })
+            }),
+        delete: (card_id: string) =>
+            request(`/flashcards/${card_id}`, { method: 'DELETE' }),
+    },
 }

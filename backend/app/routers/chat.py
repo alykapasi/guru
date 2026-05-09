@@ -1,6 +1,7 @@
 # app/routers/chat.py
 
 from fastapi import APIRouter, Depends, HTTPException
+import json
 from pydantic import BaseModel
 import uuid
 
@@ -96,7 +97,7 @@ async def chat_message(
     user = Depends(get_current_user),
     pool = Depends(get_pool)
 ):
-    # 1. get session's materials
+    # 1. Load session + materials + history — acquire and release immediately
     async with pool.acquire() as conn:
         session = await conn.fetchrow(
             "SELECT id FROM sessions WHERE id=$1 AND user_id=$2",
@@ -104,69 +105,73 @@ async def chat_message(
         )
         if not session:
             raise HTTPException(404, "Session not found")
-        
+
         material_rows = await conn.fetch(
             "SELECT material_id FROM session_materials WHERE session_id=$1",
             req.session_id
         )
         history = await conn.fetch(
-            """
-            SELECT role, content FROM messages
-            WHERE session_id=$1 ORDER BY created_at DESC LIMIT 20
-            """,
+            """SELECT role, content FROM messages
+               WHERE session_id=$1 ORDER BY created_at DESC LIMIT 20""",
             req.session_id
         )
 
-        material_ids = [r["material_id"] for r in material_rows]
-        if not material_ids:
-            raise HTTPException(400, "No materials attached to this session")
-        
-        history = list(reversed(history))
+    material_ids = [r["material_id"] for r in material_rows]
+    if not material_ids:
+        raise HTTPException(400, "No materials attached to this session")
 
-        # 2. build context across all materials
-        ctx = await build_teaching_context(
-            req.message, material_ids, str(user["id"]), pool
+    history = list(reversed(history))
+
+    # 2. Build context — acquires and releases its own connection internally
+    ctx = await build_teaching_context(req.message, material_ids, str(user["id"]), pool)
+
+    # 3. LLM call — no DB connection held
+    system_prompt = build_chat_system_prompt(ctx)
+    messages = [
+        {"role": r["role"], "content": r["content"]} for r in history
+    ] + [{"role": "user", "content": req.message}]
+
+    reply = await _chat_with_system(
+        model=SMART, system=system_prompt,
+        messages=messages, max_tokens=2048
+    )
+
+    # 4. Resolve citations — pure in-memory, no DB needed
+    from app.services.citations import resolve_citations
+    citations = resolve_citations(reply, ctx["chunks"])
+
+    # 5. Persist both turns
+    async with pool.acquire() as conn:
+        await conn.execute(
+            """
+            INSERT INTO messages (id, session_id, role, content, chunk_ids, citations)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            """,
+            uuid.uuid4(), req.session_id, 'user', req.message, [], '[]'
+        )
+        await conn.execute(
+            """INSERT INTO messages (id, session_id, role, content, chunk_ids, citations)
+            VALUES ($1, $2, $3, $4, $5, $6)""",
+            uuid.uuid4(), req.session_id, 'assistant', reply,
+            [uuid.UUID(c) for c in ctx["chunk_ids"]] if ctx["chunk_ids"] else [],
+            json.dumps(citations)
+        )
+        msg_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM messages WHERE session_id=$1 AND role='assistant'",
+            req.session_id
         )
 
-        # 3. build system prompt and call llm
-        system_prompt = build_chat_system_prompt(ctx)
-        messages = [
-            {"role": r["role"], "content": r["content"]}
-            for r in history
-        ] + [{"role": "user", "content": req.message}]
+    # 6. Trigger chat assessment every 5 messages (fire and forget)
+    if msg_count % 5 == 0:
+        import asyncio
+        from app.services.mastery import assess_chat_mastery
+        asyncio.create_task(assess_chat_mastery(req.session_id, material_ids, pool))
 
-        reply = await _chat_with_system(
-            model=SMART, system=system_prompt,
-            messages=messages, max_tokens=2048
-        )
-
-        # 4. persist
-        async with pool.acquire() as conn:
-            for role, content, chunk_ids in [
-                ("user", req.message, []),
-                ("assistant", reply, ctx["chunk_ids"]),
-            ]:
-                await conn.execute(
-                    """
-                    INSERT INTO messages (id, session_id, role, content, chunk_ids)
-                    VALUES ($1, $2, $3, $4, $5)
-                    """,
-                    uuid.uuid4(), req.session_id, role, content,
-                    [uuid.UUID(c) for c in chunk_ids] if chunk_ids else []
-                )
-
-        async with pool.acquire() as conn:
-            msg_count = await conn.fetchval(
-                "SELECT COUNT(*) FROM messages WHERE session_id=$1 AND role='assistant'",
-                req.session_id
-            )
-
-        if msg_count % 5 == 0:
-            import asyncio
-            from app.services.mastery import CHAT_ASSESSMENT_INTERVAL, assess_chat_mastery
-            asyncio.create_task(assess_chat_mastery(req.session_id, material_ids, pool))
-
-        return {"reply": reply, "chunk_ids": ctx["chunk_ids"]}
+    return {
+        "reply":     reply,
+        "citations": citations,
+        "chunk_ids": ctx["chunk_ids"],
+    }
     
 @router.get("/sessions")
 async def list_sessions(
@@ -198,17 +203,35 @@ async def list_sessions(
 @router.get("/sessions/{session_id}/messages")
 async def get_session_messages(
     session_id: uuid.UUID,
-    user = Depends(get_current_user),
-    pool = Depends(get_pool),
+    user=Depends(get_current_user),
+    pool=Depends(get_pool),
 ):
+    import json
     async with pool.acquire() as conn:
         messages = await conn.fetch(
-            """
-            SELECT role, content, created_at
-            FROM messages
-            WHERE session_id=$1
-            ORDER BY created_at ASC
-            """,
+            """SELECT role, content, citations, created_at
+               FROM messages WHERE session_id=$1
+               ORDER BY created_at ASC""",
             session_id
         )
-    return [dict(m) for m in messages]
+    return [
+        {
+            **dict(m),
+            "citations": json.loads(m["citations"]) if isinstance(m["citations"], str) else (m["citations"] or [])
+        }
+        for m in messages
+    ]
+
+@router.post("/debug-retrieval")
+async def debug_retrieval(req: ChatRequest, user=Depends(get_current_user), pool=Depends(get_pool)):
+    async with pool.acquire() as conn:
+        material_rows = await conn.fetch(
+            "SELECT material_id FROM session_materials WHERE session_id=$1", req.session_id
+        )
+    material_ids = [r["material_id"] for r in material_rows]
+    ctx = await build_teaching_context(req.message, material_ids, str(user["id"]), pool)
+    return {
+        "chunk_count": len(ctx["chunks"]),
+        "prompt_preview": ctx["retrieved_chunks"][:500],  # first 500 chars
+        "citations_possible": len(ctx["chunks"]) > 0,
+    }

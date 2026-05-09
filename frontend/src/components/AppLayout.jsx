@@ -3,9 +3,10 @@
 import { NavLink, useNavigate } from 'react-router-dom'
 
 const NAV = [
-    { to: '/library', label: 'Library', icon: '📚'},
-    { to: '/sessions', label: 'Sessions', icon: '🧠' },
-    { to: '/wiki', label: 'Wiki', icon: '📖' },
+    { to: '/library',    label: 'Library',    icon: '📚' },
+    { to: '/sessions',   label: 'Sessions',   icon: '🧠' },
+    { to: '/flashcards', label: 'Flashcards', icon: '🃏' },
+    { to: '/wiki',       label: 'Wiki',       icon: '📖' },
 ]
 
 export default function AppLayout({ children }) {
