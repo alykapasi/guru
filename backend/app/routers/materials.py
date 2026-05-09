@@ -50,20 +50,15 @@ async def upload_materials(
     return {"id": str(material_id), "status": "pending"}
 
 @router.get("/")
-async def list_materials(
-    user = Depends(get_current_user),
-    pool = Depends(get_pool),
-):
+async def list_materials(user=Depends(get_current_user), pool=Depends(get_pool)):
     async with pool.acquire() as conn:
         rows = await conn.fetch(
-            """
-            SELECT 
-                id, title, filename, status, created_at, concepts,
-                file_type, parent_material_id::text, sub_doc_count, page_range
-            FROM materials
-            WHERE user_id=$1
-            ORDER BY created_at DESC
-            """, str(user["id"])
+            """SELECT id, title, filename, status, created_at, concepts,
+                      file_type, parent_material_id, sub_doc_count, sub_doc_index, page_range
+               FROM materials
+               WHERE user_id=$1 AND parent_material_id IS NULL
+               ORDER BY created_at DESC""",
+            str(user["id"])
         )
     return [dict(r) for r in rows]
 
@@ -85,6 +80,22 @@ async def get_material(
     if not row:
         raise HTTPException(status_code=404, detail="Material not found")
     return dict(row)
+
+@router.get("/{material_id}/parts")
+async def get_material_parts(
+    material_id: uuid.UUID,
+    user=Depends(get_current_user),
+    pool=Depends(get_pool),
+):
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            """SELECT id, title, status, sub_doc_index, page_range
+               FROM materials
+               WHERE parent_material_id=$1 AND user_id=$2
+               ORDER BY sub_doc_index ASC""",
+            material_id, str(user["id"])
+        )
+    return [dict(r) for r in rows]
 
 @router.patch("/{material_id}/rename")
 async def rename_material(
@@ -137,3 +148,35 @@ async def delete_material(
             pass
 
     return {"status": "deleted"}
+
+@router.get("/chunks/{chunk_id}")
+async def get_chunk(
+    chunk_id: uuid.UUID,
+    user=Depends(get_current_user),
+    pool=Depends(get_pool),
+):
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                c.id,
+                c.raw_text,
+                c.heading_path,
+                c.chunk_index,
+                c.chunk_type,
+                COALESCE(parent.title, m.title) AS material_title,
+                COALESCE(parent.id, m.id)       AS material_id,
+                sub.page_range                  AS page_range
+            FROM chunks c
+            JOIN materials m ON m.id = c.material_id
+            LEFT JOIN materials parent ON parent.id = m.parent_material_id
+            LEFT JOIN materials sub
+                ON sub.id = c.material_id
+                AND sub.parent_material_id IS NOT NULL
+            WHERE c.id = $1
+            """,
+            chunk_id
+        )
+    if not row:
+        raise HTTPException(404, "Chunk not found")
+    return dict(row)

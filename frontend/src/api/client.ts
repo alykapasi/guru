@@ -44,6 +44,7 @@ export const api = {
         },
         list: () => request('/materials/'),
         get:  (id: string) => request(`/materials/${id}`),
+        parts: (id: string) => request(`/materials/${id}/parts`),
         rename: (id: string, title: string) =>
             request(`/materials/${id}/rename`, {
                 method: "PATCH",
@@ -96,6 +97,18 @@ export const api = {
                 method: 'POST',
                 body: JSON.stringify({ quiz_attempt_id, answers: sanitizeAnswers(answers) })
             }),
+        cloze: {
+            generate: (session_id: string, topic?: string, n_exercises = 5) =>
+                request('/quiz/cloze/generate', {
+                    method: 'POST',
+                    body: JSON.stringify({ session_id, topic, n_exercises })
+                }),
+            submit: (quiz_attempt_id: string, answers: Record<string, string>) =>
+                request('/quiz/cloze/submit', {
+                    method: 'POST',
+                    body: JSON.stringify({ quiz_attempt_id, answers })
+                }),
+        }
     },
     profile: {
         save: (answers: object) =>
@@ -133,5 +146,16 @@ export const api = {
             }),
         delete: (card_id: string) =>
             request(`/flashcards/${card_id}`, { method: 'DELETE' }),
+    },
+    chunks: {
+        get: (chunk_id: string) => request(`/materials/chunks/${chunk_id}`),
+    },
+    stats: {
+        overview:           () => request('/stats/overview'),
+        masteryOverTime:    () => request('/stats/mastery-over-time'),
+        byMaterial:         () => request('/stats/by-material'),
+        activity:           () => request('/stats/activity'),
+        weakConcepts:       () => request('/stats/weak-concepts'),
+        quizHistory:        () => request('/stats/quiz-history'),
     },
 }

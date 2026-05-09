@@ -377,13 +377,13 @@ function RightPanel({ collapsed, onToggle, tab, onTabChange, sessionId }) {
                  className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize
                             hover:bg-violet-500/50 transition-colors z-10" />
             <div className="flex border-b border-[#1e1e2a]">
-                {['lesson', 'quiz', 'cards'].map(t => (
+                {['lesson', 'quiz', 'cloze', 'cards'].map(t => (
                     <button key={t} onClick={() => onTabChange(t)}
                         className={`flex-1 py-3 text-xs font-medium capitalize transition-colors border-b-2
                             ${tab === t
                                 ? 'border-violet-500 text-violet-300'
                                 : 'border-transparent text-slate-500 hover:text-white'}`}>
-                        {t === 'cards' ? '🃏' : t}
+                        {t === 'cards' ? 'Flashcards' : t === 'cloze' ? 'fill' : t}
                     </button>
                 ))}
                 <button onClick={onToggle}
@@ -399,6 +399,9 @@ function RightPanel({ collapsed, onToggle, tab, onTabChange, sessionId }) {
                 </div>
                 <div style={{ display: tab === 'cards' ? 'block' : 'none' }}>
                     <FlashcardTab sessionId={sessionId} />
+                </div>
+                <div style={{ display: tab === 'cloze' ? 'block' : 'none' }}>
+                    <ClozeTab sessionId={sessionId} />
                 </div>
             </div>
         </div>
@@ -766,6 +769,182 @@ function FlashcardTab({ sessionId }) {
                     ))}
                 </div>
             )}
+        </div>
+    )
+}
+
+// ── Cloze Tab ───────────────────────────────────────────────────────────────
+function ClozeTab({ sessionId }) {
+    const [topic, setTopic] = useState('')
+    const [exercises, setExercises] = useState(null)
+    const [attemptId, setAttemptId] = useState(null)
+    const [answers, setAnswers] = useState({})   // { exerciseId: "answer1|||answer2" }
+    const [results, setResults] = useState(null)
+    const [loading, setLoading] = useState(false)
+
+    async function generate() {
+        setLoading(true)
+        setExercises(null); setResults(null); setAnswers({})
+        try {
+            const res = await api.quiz.cloze.generate(sessionId, topic || undefined, 5)
+            setExercises(res.exercises)
+            setAttemptId(res.attempt_id)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    async function submit() {
+        setLoading(true)
+        try {
+            const res = await api.quiz.cloze.submit(attemptId, answers)
+            setResults(res)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    function setBlank(exerciseId, blankIndex, value, totalBlanks) {
+        setAnswers(prev => {
+            const current = (prev[exerciseId] || '').split('|||')
+            while (current.length < totalBlanks) current.push('')
+            current[blankIndex] = value
+            return { ...prev, [exerciseId]: current.join('|||') }
+        })
+    }
+
+    function getBlank(exerciseId, blankIndex) {
+        return (answers[exerciseId] || '').split('|||')[blankIndex] || ''
+    }
+
+    if (loading) return (
+        <div className="flex items-center justify-center h-32">
+            <span className="text-slate-500 text-xs">
+                {exercises ? 'Grading...' : 'Generating exercises...'}
+            </span>
+        </div>
+    )
+
+    if (!exercises) return (
+        <div className="p-4 space-y-3">
+            <input value={topic} onChange={e => setTopic(e.target.value)}
+                placeholder="Topic (optional)"
+                className="w-full bg-[#0f0f13] border border-[#2e2e3a] rounded-lg px-3 py-2
+                           text-white placeholder-slate-500 focus:outline-none
+                           focus:border-violet-500 text-xs" />
+            <button onClick={generate}
+                className="w-full bg-violet-600 hover:bg-violet-500 text-white py-2
+                           rounded-lg text-xs font-medium transition-colors">
+                Generate exercises
+            </button>
+            <p className="text-slate-600 text-xs text-center pt-2">
+                Fill in the blanks from memory
+            </p>
+        </div>
+    )
+
+    if (results) return (
+        <div className="p-4 space-y-3">
+            <div className="bg-violet-600/10 border border-violet-500/20 rounded-xl p-3 text-center">
+                <p className="text-xl font-bold text-white">
+                    {Math.round(results.overall_score * 100)}%
+                </p>
+                <p className="text-violet-300 text-xs">Overall score</p>
+            </div>
+
+            {results.results.map((r, i) => (
+                <div key={r.exercise_id}
+                    className={`rounded-lg p-3 border text-xs space-y-2
+                        ${r.score >= 0.8 ? 'bg-emerald-500/5 border-emerald-500/20'
+                        : r.score >= 0.5 ? 'bg-yellow-500/5 border-yellow-500/20'
+                        : 'bg-red-500/5 border-red-500/20'}`}>
+                    <div className="flex justify-between">
+                        <span className="text-slate-400 font-medium">{r.concept}</span>
+                        <span className={`font-bold
+                            ${r.score >= 0.8 ? 'text-emerald-400'
+                            : r.score >= 0.5 ? 'text-yellow-400'
+                            : 'text-red-400'}`}>
+                            {Math.round(r.score * 100)}%
+                        </span>
+                    </div>
+                    {r.blank_results.map((b, j) => (
+                        <div key={j} className="flex items-start gap-2">
+                            <span className={`shrink-0 mt-0.5
+                                ${b.correct ? 'text-emerald-400' : 'text-red-400'}`}>
+                                {b.correct ? '✓' : '✗'}
+                            </span>
+                            <div>
+                                <p className="text-slate-300">
+                                    {b.correct
+                                        ? b.expected
+                                        : <><span className="line-through text-red-400">{b.given || '(blank)'}</span>
+                                           {' → '}
+                                           <span className="text-emerald-400">{b.expected}</span></>}
+                                </p>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            ))}
+
+            <button onClick={() => { setExercises(null); setResults(null); setAnswers({}) }}
+                className="w-full border border-[#2e2e3a] hover:border-violet-500
+                           text-slate-400 py-2 rounded-lg text-xs transition-colors">
+                New exercises
+            </button>
+        </div>
+    )
+
+    return (
+        <div className="p-4 space-y-5">
+            {exercises.map((ex, i) => {
+                // Split passage on ___ to render inline inputs
+                const segments = ex.passage.split('___')
+                return (
+                    <div key={ex.id} className="space-y-2">
+                        <div className="flex items-start justify-between gap-2">
+                            <p className="text-slate-500 text-xs font-medium">{ex.concept}</p>
+                            {ex.hint && (
+                                <span className="text-slate-600 text-xs italic shrink-0">
+                                    💡 {ex.hint}
+                                </span>
+                            )}
+                        </div>
+                        {/* Passage with inline inputs */}
+                        <div className="text-slate-200 text-xs leading-loose">
+                            {segments.map((seg, j) => (
+                                <span key={j}>
+                                    {seg}
+                                    {j < ex.blanks.length && (
+                                        <input
+                                            value={getBlank(ex.id, j)}
+                                            onChange={e => setBlank(ex.id, j, e.target.value, ex.n_blanks)}
+                                            placeholder="___"
+                                            className="inline-block bg-[#0f0f13] border-b border-violet-500/50
+                                                       text-violet-200 text-xs px-1 mx-1 focus:outline-none
+                                                       focus:border-violet-400 min-w-[80px] max-w-[160px]"
+                                            style={{ width: `${Math.max(80, (getBlank(ex.id, j).length + 4) * 7)}px` }}
+                                        />
+                                    )}
+                                </span>
+                            ))}
+                        </div>
+                        {/* Difficulty pill */}
+                        <span className={`text-xs px-2 py-0.5 rounded-full
+                            ${ex.difficulty === 'hard'   ? 'bg-red-500/10 text-red-400'
+                            : ex.difficulty === 'medium' ? 'bg-yellow-500/10 text-yellow-400'
+                            : 'bg-emerald-500/10 text-emerald-400'}`}>
+                            {ex.difficulty}
+                        </span>
+                    </div>
+                )
+            })}
+
+            <button onClick={submit}
+                className="w-full bg-violet-600 hover:bg-violet-500 text-white
+                           py-2.5 rounded-lg text-xs font-medium transition-colors">
+                Submit
+            </button>
         </div>
     )
 }

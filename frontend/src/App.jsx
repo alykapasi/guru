@@ -9,6 +9,7 @@ import LibraryPage from './pages/LibraryPage'
 import LoginPage from './pages/LoginPage'
 import OnboardingPage from './pages/OnboardingPage'
 import SessionsPage from './pages/SessionsPage'
+import StatsPage from './pages/StatsPage'
 import StudyPage from './pages/StudyPage'
 import WikiPage from './pages/WikiPage'
 import NewSessionPage from './pages/NewSessionPage'
@@ -35,6 +36,7 @@ export default function App() {
           <Route path="/study/:sessionId" element={<PrivateRoute><StudyPage /></PrivateRoute>} />
           <Route path="/dashboard" element={<Navigate to="/library" replace />} />
           <Route path="/flashcards" element={<PrivateRoute><FlashcardsPage /></PrivateRoute>} />
+          <Route path="/stats" element={<PrivateRoute><StatsPage /></PrivateRoute>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </BrowserRouter>

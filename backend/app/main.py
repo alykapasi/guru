@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 
 from app.db import close_pool, init_pool
-from app.routers import auth, chat, flashcards, lessons, materials, profile, quiz
+from app.routers import auth, chat, flashcards, lessons, materials, profile, stats, quiz
 from app.services.storage import ensure_bucket
 
 load_dotenv()
@@ -39,4 +39,5 @@ app.include_router(flashcards.router)
 app.include_router(lessons.router)
 app.include_router(materials.router)
 app.include_router(profile.router)
+app.include_router(stats.router)
 app.include_router(quiz.router)
